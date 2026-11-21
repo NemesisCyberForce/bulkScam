@@ -1,0 +1,112 @@
+name: Sync Hugging Face Space <-> GitHub Repo
+
+# Diese Datei gehört nach: NemesisCyberForce/bulkScam/.github/workflows/sync-hf.yml
+# Benötigtes Secret (im selben Repo): PULL_HF_GIT_TOKEN  (Hugging Face Token mit WRITE-Recht auf den Space)
+
+on:
+  workflow_dispatch:
+    inputs:
+      direction:
+        description: 'Synchronisations-Richtung'
+        required: true
+        type: choice
+        options:
+          - 'HF -> GitHub'
+          - 'GitHub -> HF'
+      hf_repo:
+        description: 'Hugging Face Space (z. B. Alibrown/BulkScam)'
+        required: true
+        default: 'Alibrown/BulkScam'
+        type: string
+      branch_name:
+        description: 'GitHub-Branch (Standard: main)'
+        required: false
+        default: 'main'
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      HF_TOKEN: ${{ secrets.PULL_HF_GIT_TOKEN }}
+      HF_REPO_RAW: ${{ inputs.hf_repo }}
+      TARGET_BRANCH: ${{ inputs.branch_name }}
+
+    steps:
+      # 1. Dieses Repo auschecken (mit dem eingebauten github.token, kein PAT nötig)
+      - name: Checkout GitHub repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch_name }}
+          fetch-depth: 0
+          lfs: true
+
+      - name: Git Identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      # 2. Vorab-Check: ist das HF-Secret da und gültig?
+      - name: Preflight (HF Token prüfen)
+        run: |
+          HF_REPO="${HF_REPO_RAW%/}"
+          if [ -z "$HF_TOKEN" ]; then
+            echo "::error::Secret PULL_HF_GIT_TOKEN ist leer oder nicht vorhanden (Settings -> Secrets and variables -> Actions)."
+            exit 1
+          fi
+          CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer $HF_TOKEN" \
+            "https://huggingface.co/api/spaces/${HF_REPO}")
+          echo "HF API Status für ${HF_REPO}: $CODE"
+          if [ "$CODE" != "200" ]; then
+            echo "::error::HF-Token hat keinen Zugriff auf den Space (Status $CODE). Space-Name und Token-Rechte prüfen."
+            exit 1
+          fi
+
+      # -----------------------------------------------------------
+      # FALL A: HF -> GitHub
+      # -----------------------------------------------------------
+      - name: Sync HF Space -> GitHub
+        if: ${{ inputs.direction == 'HF -> GitHub' }}
+        run: |
+          set -euo pipefail
+          HF_REPO="${HF_REPO_RAW%/}"
+          echo "Synchronisiere: HF (${HF_REPO}) -> GitHub (${GITHUB_REPOSITORY}, Branch ${TARGET_BRANCH})"
+
+          rm -rf /tmp/hf_tmp
+          git clone --depth=1 "https://user:${HF_TOKEN}@huggingface.co/spaces/${HF_REPO}" /tmp/hf_tmp
+
+          # Dateien übernehmen. .git und .github bleiben unangetastet
+          # (github.token darf keine Workflow-Dateien ändern).
+          rsync -a --delete \
+            --exclude='.git' \
+            --exclude='.github' \
+            /tmp/hf_tmp/ ./
+
+          git add -A
+          if git diff --staged --quiet; then
+            echo "Keine Änderungen gefunden."
+            exit 0
+          fi
+
+          git commit -m "Auto-Sync from Hugging Face Space: ${HF_REPO}"
+          git push origin "HEAD:${TARGET_BRANCH}"
+
+      # -----------------------------------------------------------
+      # FALL B: GitHub -> HF
+      # -----------------------------------------------------------
+      - name: Sync GitHub -> HF Space
+        if: ${{ inputs.direction == 'GitHub -> HF' }}
+        run: |
+          set -euo pipefail
+          HF_REPO="${HF_REPO_RAW%/}"
+          echo "Synchronisiere: GitHub (${TARGET_BRANCH}) -> HF Space (${HF_REPO})"
+
+          git lfs install
+          git remote remove hf 2>/dev/null || true
+          git remote add hf "https://user:${HF_TOKEN}@huggingface.co/spaces/${HF_REPO}"
+
+          git push -f hf "HEAD:refs/heads/main"
