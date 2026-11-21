@@ -1,0 +1,71 @@
+name: Manual HF Space to GitHub Branch
+
+on:
+  workflow_dispatch:
+    inputs:
+      hf_repo:
+        description: 'Alibrown/BulkScam'
+        required: true
+        type: string
+      gh_repo:
+        description: 'NemesisCyberForce/bulkScam/'
+        required: true
+        type: string
+      branch_name:
+        description: ''
+        required: false
+        default: ''
+        type: string
+
+jobs:
+  manual-sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout target GitHub repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.gh_repo }}
+          token: ${{ secrets.GH_PAT || github.token }}
+          fetch-depth: 0
+          lfs: true
+
+      - name: Pull selected HF Space and push to new branch
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_REPO: ${{ inputs.hf_repo }}
+          GH_REPO: ${{ inputs.gh_repo }}
+          CUSTOM_BRANCH: ${{ inputs.branch_name }}
+          GH_TOKEN_INPUT: ${{ secrets.GH_PAT || github.token }}
+        run: |
+          set -e
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          SPACE_SLUG="${HF_REPO#*/}"
+          if [ -n "$CUSTOM_BRANCH" ]; then
+            TARGET_BRANCH="$CUSTOM_BRANCH"
+          else
+            TARGET_BRANCH="hf/${SPACE_SLUG}/$(date -u +%Y%m%d-%H%M%S)"
+          fi
+
+          git checkout -b "$TARGET_BRANCH"
+
+          rm -rf hf_tmp
+          git clone --depth=1 "https://user:${HF_TOKEN}@huggingface.co/spaces/${HF_REPO}" hf_tmp
+          rm -rf hf_tmp/.git
+
+          shopt -s dotglob
+          cp -r hf_tmp/* .
+          rm -rf hf_tmp
+
+          git add -A
+          if git diff --staged --quiet; then
+            echo "Keine Änderungen zwischen HF Space und Ziel-Repo gefunden."
+            exit 0
+          fi
+
+          git commit -m "Sync ${HF_REPO} -> ${GH_REPO} (${TARGET_BRANCH})"
+          git push "https://x-access-token:${GH_TOKEN_INPUT}@github.com/${GH_REPO}.git" "HEAD:refs/heads/${TARGET_BRANCH}"
