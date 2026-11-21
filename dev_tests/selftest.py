@@ -517,7 +517,7 @@ def test_llm(B):
     cfg = ac.LLMConfig("c", B + "/llm/v1", "m", "KEY-ABCDEF")
     be = ac.OpenAICompatBackend(cfg)
     LLM["prompts"].clear()
-    r = run("hexsec", backend=be)
+    r = run("hexsec", backend=be, llm_mode="all")
     got = {x["file"]: x["result"]["classification"] for x in r["llm_results"]}
     check("LLM klassifiziert HexSecGPT.py als JAILBREAK_WRAPPER", got.get("HexSecGPT.py") == "JAILBREAK_WRAPPER", got)
     p = [x for x in LLM["prompts"] if "File: HexSecGPT.py" in x][0]
@@ -526,15 +526,15 @@ def test_llm(B):
     check("Shell ohne Treffer geht nicht ans LLM", not any("File: install.sh" in x for x in LLM["prompts"]))
     LLM["mode"] = "stealer"
     LLM["mode"] = "402"
-    r = run("honest", backend=be)
+    r = run("honest", backend=be, llm_mode="all")
     check("LLM-Fehler (402) sichtbar, Verdikt unveraendert", any("402" in e for e in r["llm_errors"]) and tag(r["verdict"]) == "OK", r["llm_errors"])
     LLM["mode"] = "garbage"
-    check("Ungueltige LLM-Antwort wird gemeldet", any("JSON" in e for e in run("honest", backend=be)["llm_errors"]))
+    check("Ungueltige LLM-Antwort wird gemeldet", any("JSON" in e for e in run("honest", backend=be, llm_mode="all")["llm_errors"]))
     LLM["mode"] = "ok"
     LLM["calls"] = 0
-    run("train", backend=be, llm_max_files=1)
+    run("train", backend=be, llm_mode="all", llm_max_files=1)
     check("llm_max_files begrenzt die Aufrufe", LLM["calls"] == 1, LLM["calls"])
-    r = run("inject", backend=be)
+    r = run("inject", backend=be, llm_mode="all")
     check("Injection-Dateien werden nicht an das LLM gesendet", r["llm_skipped"] and tag(r["verdict"]) == "WARNING", (r["llm_skipped"], r["verdict"]))
     bad = ac.OpenAICompatBackend(ac.LLMConfig("x", "http://127.0.0.1:1/v1", "m", "KEY-ABCDEF"))
     check("API-Key steht nie in Fehlermeldungen", "KEY-ABCDEF" not in json.dumps(run("honest", backend=bad), default=str))
