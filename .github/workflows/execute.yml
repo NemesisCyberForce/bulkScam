@@ -1,71 +1,118 @@
-name: Manual HF Space to GitHub Branch
+name: Sync Hugging Face Space <-> GitHub Repo
 
 on:
   workflow_dispatch:
     inputs:
-      hf_repo:
-        description: 'Alibrown/BulkScam'
+      direction:
+        description: 'Synchronisations-Richtung'
         required: true
+        type: choice
+        options:
+          - 'HF -> GitHub'
+          - 'GitHub -> HF'
+      hf_repo:
+        description: 'Hugging Face Space (z. B. Alibrown/BulkScam)'
+        required: true
+        default: 'Alibrown/BulkScam'
         type: string
       gh_repo:
-        description: 'NemesisCyberForce/bulkScam/'
+        description: 'GitHub Repo (z. B. NemesisCyberForce/bulkScam)'
         required: true
+        default: 'NemesisCyberForce/bulkScam'
         type: string
       branch_name:
-        description: ''
+        description: 'Branch-Name (Standard: main)'
         required: false
-        default: ''
+        default: 'main'
         type: string
 
 jobs:
-  manual-sync:
+  sync:
     runs-on: ubuntu-latest
     permissions:
       contents: write
 
     steps:
-      - name: Checkout target GitHub repository
+      # 1. Ziel-Repository von GitHub auschecken
+      - name: Checkout GitHub repository
         uses: actions/checkout@v4
         with:
           repository: ${{ inputs.gh_repo }}
-          token: ${{ secrets.GH_PAT || github.token }}
+          token: ${{ secrets.PULL_GIT_HF_TOKEN || github.token }}
           fetch-depth: 0
           lfs: true
 
-      - name: Pull selected HF Space and push to new branch
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          HF_REPO: ${{ inputs.hf_repo }}
-          GH_REPO: ${{ inputs.gh_repo }}
-          CUSTOM_BRANCH: ${{ inputs.branch_name }}
-          GH_TOKEN_INPUT: ${{ secrets.GH_PAT || github.token }}
+      # 2. Git Identity konfigurieren
+      - name: Setup Git Config
         run: |
-          set -e
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          SPACE_SLUG="${HF_REPO#*/}"
-          if [ -n "$CUSTOM_BRANCH" ]; then
-            TARGET_BRANCH="$CUSTOM_BRANCH"
-          else
-            TARGET_BRANCH="hf/${SPACE_SLUG}/$(date -u +%Y%m%d-%H%M%S)"
-          fi
+      # -----------------------------------------------------------
+      # FALL A: Von Hugging Face zu GitHub synchronisieren
+      # -----------------------------------------------------------
+      - name: Sync HF Space -> GitHub
+        if: ${{ inputs.direction == 'HF -> GitHub' }}
+        env:
+          HF_TOKEN: ${{ secrets.PULL_HF_GIT_TOKEN }}
+          GH_TOKEN: ${{ secrets.PULL_GIT_HF_TOKEN || github.token }}
+          HF_REPO_RAW: ${{ inputs.hf_repo }}
+          GH_REPO_RAW: ${{ inputs.gh_repo }}
+          TARGET_BRANCH: ${{ inputs.branch_name }}
+        run: |
+          set -e
+          # Trailing slashes entfernen, falls vorhanden
+          HF_REPO="${HF_REPO_RAW%/}"
+          GH_REPO="${GH_REPO_RAW%/}"
 
-          git checkout -b "$TARGET_BRANCH"
+          echo "Synchronisiere: HF ($HF_REPO) -> GitHub ($GH_REPO auf Branch $TARGET_BRANCH)"
 
+          # Auf Zielbranch wechseln/erstellen
+          git checkout -B "$TARGET_BRANCH"
+
+          # HF Space temporär klonen
           rm -rf hf_tmp
           git clone --depth=1 "https://user:${HF_TOKEN}@huggingface.co/spaces/${HF_REPO}" hf_tmp
+          
+          # .git Ordner von HF entfernen, damit wir die Dateien übernehmen können
           rm -rf hf_tmp/.git
 
+          # Dateien kopieren (inklusive versteckter Dateien, außer .git von GitHub)
           shopt -s dotglob
-          cp -r hf_tmp/* .
+          cp -rf hf_tmp/* .
           rm -rf hf_tmp
 
+          # Änderungen prüfen und committen
           git add -A
           if git diff --staged --quiet; then
-            echo "Keine Änderungen zwischen HF Space und Ziel-Repo gefunden."
+            echo "Keine Änderungen zwischen HF Space und GitHub gefunden."
             exit 0
           fi
 
-          git commit -m "Sync ${HF_REPO} -> ${GH_REPO} (${TARGET_BRANCH})"
-          git push "https://x-access-token:${GH_TOKEN_INPUT}@github.com/${GH_REPO}.git" "HEAD:refs/heads/${TARGET_BRANCH}"
+          git commit -m "Auto-Sync from Hugging Face Space: ${HF_REPO}"
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${GH_REPO}.git" "$TARGET_BRANCH"
+
+      # -----------------------------------------------------------
+      # FALL B: Von GitHub zu Hugging Face synchronisieren
+      # -----------------------------------------------------------
+      - name: Sync GitHub -> HF Space
+        if: ${{ inputs.direction == 'GitHub -> HF' }}
+        env:
+          HF_TOKEN: ${{ secrets.PULL_HF_GIT_TOKEN }}
+          HF_REPO_RAW: ${{ inputs.hf_repo }}
+        run: |
+          set -e
+          HF_REPO="${HF_REPO_RAW%/}"
+
+          echo "Synchronisiere: GitHub -> HF Space ($HF_REPO)"
+
+          # Hugging Face als Remote-Ziel hinzufügen
+          git remote remove hf 2>/dev/null || true
+          git remote add hf "https://user:${HF_TOKEN}@huggingface.co/spaces/${HF_REPO}"
+
+          # HF Spaces erwarten ihren Haupt-Code standardmäßig im 'main' Branch
+          # Falls LFS-Dateien existieren, LFS sicherstellen
+          git lfs install
+
+          # Code zu Hugging Face pushen (mit --force, damit der Space den Stand exakt übernimmt)
+          git push -f hf "HEAD:refs/heads/main"
