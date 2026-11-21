@@ -1,0 +1,172 @@
+name: Sync HF Space and GitHub
+
+on:
+  workflow_dispatch:
+    inputs:
+      direction:
+        description: 'Richtung'
+        required: true
+        type: choice
+        options:
+          - hf-to-github
+          - github-to-hf
+        default: hf-to-github
+      hf_repo:
+        description: 'Hugging Face Space (owner/space)'
+        required: true
+        default: 'Alibrown/BulkScam'
+        type: string
+      gh_repo:
+        description: 'GitHub-Repo (owner/repo, ohne Slash am Ende)'
+        required: true
+        default: 'NemesisCyberForce/bulkScam'
+        type: string
+      github_ref:
+        description: 'GitHub-Branch zum Lesen (leer = Default-Branch)'
+        required: false
+        default: ''
+        type: string
+      branch_name:
+        description: 'Zielbranch nur für hf-to-github (leer = hf/<space>/<zeit>)'
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-hf-github-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Normalize repository names
+        id: repos
+        env:
+          GH_REPO_INPUT: ${{ inputs.gh_repo }}
+          HF_REPO_INPUT: ${{ inputs.hf_repo }}
+        run: |
+          set -euo pipefail
+          GH="${GH_REPO_INPUT%/}"
+          GH="${GH%.git}"
+          HF="${HF_REPO_INPUT%/}"
+          HF="${HF%.git}"
+          echo "gh_repo=${GH}" >> "$GITHUB_OUTPUT"
+          echo "hf_repo=${HF}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout GitHub repository (default branch)
+        if: inputs.github_ref == ''
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.repos.outputs.gh_repo }}
+          token: ${{ secrets.PULL_GIT_HF_TOKEN }}
+          fetch-depth: 1
+          persist-credentials: false
+          lfs: true
+
+      - name: Checkout GitHub repository (specific branch)
+        if: inputs.github_ref != ''
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.repos.outputs.gh_repo }}
+          ref: ${{ inputs.github_ref }}
+          token: ${{ secrets.PULL_GIT_HF_TOKEN }}
+          fetch-depth: 1
+          persist-credentials: false
+          lfs: true
+
+      - name: Sync
+        shell: bash
+        env:
+          HF_TOKEN: ${{ secrets.PULL_HF_GIT_TOKEN }}
+          GH_TOKEN: ${{ secrets.PULL_GIT_HF_TOKEN }}
+          HF_REPO: ${{ steps.repos.outputs.hf_repo }}
+          GH_REPO: ${{ steps.repos.outputs.gh_repo }}
+          DIRECTION: ${{ inputs.direction }}
+          CUSTOM_BRANCH: ${{ inputs.branch_name }}
+        run: |
+          set -euo pipefail
+          export GIT_TERMINAL_PROMPT=0
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --global --add safe.directory "*"
+          git lfs install
+
+          if [ -z "${GH_TOKEN}" ] || [ -z "${HF_TOKEN}" ]; then
+            echo "Secret fehlt. Benötigt: PULL_GIT_HF_TOKEN und PULL_HF_GIT_TOKEN."
+            exit 1
+          fi
+          if [[ ! "$GH_REPO" =~ ^[^/]+/[^/]+$ ]]; then
+            echo "Ungültiges GitHub-Repo: '$GH_REPO' (owner/repo, kein Slash am Ende)"
+            exit 1
+          fi
+          if [[ ! "$HF_REPO" =~ ^[^/]+/[^/]+$ ]]; then
+            echo "Ungültiger HF-Space: '$HF_REPO' (owner/space)"
+            exit 1
+          fi
+
+          HF_USER="${HF_REPO%%/*}"
+          HF_URL="https://${HF_USER}:${HF_TOKEN}@huggingface.co/spaces/${HF_REPO}"
+          GH_PUSH_URL="https://x-access-token:${GH_TOKEN}@github.com/${GH_REPO}.git"
+
+          sync_hf_to_github() {
+            local tmp target space_slug
+            tmp="$(mktemp -d)"
+            git clone --depth=1 "$HF_URL" "$tmp/hf"
+            git -C "$tmp/hf" lfs pull
+
+            # .github bleibt auf dem GitHub-Branch erhalten
+            rsync -a --delete \
+              --exclude '.git/' \
+              --exclude '.github/' \
+              "$tmp/hf/" ./
+            rm -rf "$tmp"
+
+            git add -A
+            if git diff --staged --quiet; then
+              echo "Keine Änderungen zwischen HF Space und GitHub."
+              exit 0
+            fi
+
+            space_slug="${HF_REPO#*/}"
+            if [ -n "$CUSTOM_BRANCH" ]; then
+              target="$CUSTOM_BRANCH"
+            else
+              target="hf/${space_slug}/$(date -u +%Y%m%d-%H%M%S)"
+            fi
+
+            git checkout -b "$target"
+            git commit -m "Sync ${HF_REPO} -> ${GH_REPO} (${target})"
+            git push "$GH_PUSH_URL" "HEAD:refs/heads/${target}"
+            echo "Gepusht nach ${GH_REPO} Branch ${target}"
+          }
+
+          sync_github_to_hf() {
+            local tmp
+            tmp="$(mktemp -d)"
+            git clone --depth=1 "$HF_URL" "$tmp/hf"
+
+            rsync -a --delete \
+              --exclude '.git/' \
+              --exclude '.github/' \
+              ./ "$tmp/hf/"
+
+            git -C "$tmp/hf" add -A
+            if git -C "$tmp/hf" diff --staged --quiet; then
+              echo "Keine Änderungen zwischen GitHub und HF Space."
+              exit 0
+            fi
+
+            git -C "$tmp/hf" commit -m "Sync ${GH_REPO} -> ${HF_REPO}"
+            git -C "$tmp/hf" push origin HEAD
+            echo "Gepusht nach Hugging Face Space ${HF_REPO}"
+          }
+
+          case "$DIRECTION" in
+            hf-to-github) sync_hf_to_github ;;
+            github-to-hf) sync_github_to_hf ;;
+            *) echo "Unbekannte direction: $DIRECTION"; exit 1 ;;
+          esac
