@@ -1,6 +1,21 @@
-# bulkScam modular (AI version) IDEA
+---
+title: BulkScam - BETA
+emoji: 👀
+colorFrom: indigo
+colorTo: purple
+sdk: gradio
+sdk_version: 6.32.0
+app_file: app.py
+license: agpl-3.0
+hf_oauth: true
+short_description: Repository & Payload Audit Engine
+pinned: true
+---
+# bulkScam modular (AI version)
 ##### over py-API , gradio or streamlit
 [DE](LIESMICH.md) | [TR](OKUBENI.md)
+
+> **Status:** the German/Turkish READMEs may lag behind this English one. Streamlit files are not part of this Space (see the GitHub repo).
 
 Use it for free  to check the shit. Have fun & stay secure
 > https://huggingface.co/spaces/Alibrown/BulkScam
@@ -32,8 +47,25 @@ Static and heuristic analysis tool for detecting compromised machine learning re
 - Results from the rule module (`rules.py`), OSV, package check, artifacts, metadata, and the optional LLM analysis are passed to the evaluation function `decide()`.
 
 
+### ForgeAnalyzer (any git platform, `forge_audit.py`)
+- Understands GitHub, GitLab (incl. subgroups), Codeberg / Gitea / Forgejo, Bitbucket, SourceHut, Hugging Face (models, spaces, datasets) and GitHub gists. Self-hosted GitLab/Gitea/Forgejo hosts are detected by probing `/api/v4/version` and `/api/v1/version`.
+- Two ways to get the files, one shared analysis (same rules, same `decide()`, same report):
+  - **Archive mode**: one ZIP/TGZ download from the platform, read in memory. No API rate limit, no metadata (stars, releases, commit count).
+  - **API mode**: the existing GitHub REST path with metadata. **Auto** (default) uses the API for GitHub and falls back to the archive download when the API rate limit is hit.
+- Hugging Face and gists are fetched file by file. `.pkl/.pt/.bin/.ckpt` weight files on Hugging Face are listed but **not inspected** (pickle opcode scan is not built yet).
+- The platform URL schemes are written from knowledge of the public platforms and are covered by an offline mock test only. If a platform changes its archive URL, only `providers.py` needs a fix.
+
+### Web page audit (`web_scan.py`)
+- Static check of an ordinary page: ClickFix (clipboard write + shell command, "Win+R / paste / verify you are human"), hidden text aimed at AI agents, hidden iframes, off-site meta refresh and login forms, executable download links with lure wording, odd link hosts. Script code and page text also run through the normal rule engine.
+- Only the delivered HTML is parsed. Nothing is executed and no script/frame/image is loaded. JavaScript-rendered pages are only partly visible; the report says so.
+
+### IOCs and case log (`iocs.py`, `ioc_store.py`)
+- Every report lists indicators found **in the content**: domains, public IPs, Telegram handles, Discord webhook ids, Telegram bot ids, crypto wallets (ETH/BTC/XMR/TRX), hashed e-mails, archive passwords and archive hashes. Tokens are never stored (webhook/bot tokens are cut to their public id, e-mails to a short hash). The scammer's real IPs or proxies are **not** visible to a static scan.
+- Optional private case log (JSONL), **off unless `IOC_STORE_PATH` is set**. Every case starts as `unreviewed` (quarantine). Cases are linked into clusters by shared strong IOCs (handle, wallet, webhook, bot id, e-mail hash, archive hash) or two shared medium IOCs (IPs/domains); filehost links never link anything. Only `confirmed` cases can be exported, and the export holds IOC type/value only.
+- The "Case log" tab appears only when `IOC_STORE_PATH` **and** `CASE_ADMIN_TOKEN` are set. Verdicts are indications, not proof of fraud. The Space disk is ephemeral: copy the file out regularly.
+
 ### BinaryAnalyzer
-- Analysis of individual files and ZIP archives entirely in memory without write operations during extraction. Direct links and Google Drive links are supported (limit 50 MB).
+- Analysis of individual files and archives entirely in memory without write operations during extraction. Direct links and Google Drive links are supported (limit 50 MB).
 
 - Automatic decryption attempt for password-protected ZIP archives using common standard passwords (`infected`, `1234`, `123456`, `password`, `wormgpt`, `fraudgpt`, `github`) as well as supplied passwords.
 
@@ -47,7 +79,8 @@ Static and heuristic analysis tool for detecting compromised machine learning re
 
 - Detection of packers (UPX, Themida, MPRESS, etc.), bundlers (PyInstaller, PyArmor), and suspicious API calls in six categories: process injection, persistence, credential access, C2 and scam links, download and execute, evasion. Matching is whole word with a minimum number of distinct hits per category.
 
-- RAR and 7z archives are not unpacked. For these only hash, entropy, and password hints from the README are checked.
+- Archives are detected by magic bytes, not by file extension (an executable with an appended ZIP counts as self-extracting archive). Always available: zip (ZipCrypto password), tar, tar.gz / tar.bz2 / tar.xz, single .gz / .bz2 / .xz. With optional packages: `pyzipper` (AES-ZIP), `py7zr` (7z), `rarfile` + an `unrar`/`unar`/`bsdtar`/`7z` binary (RAR). Without them the file is reported as "not readable" and only hash, entropy and README password hints are checked.
+- Nested archives are opened up to depth 3. Limits: entries, size per entry, total unpacked size, compression ratio (>1000x), streaming decompression with a hard cap.
 
 
 ### Rule Engine (rules.py)
@@ -85,7 +118,7 @@ Static and heuristic analysis tool for detecting compromised machine learning re
 
 
 ### User Interfaces
-- `src/streamlit_app.py` (Streamlit) and `src/gradio_app.py` (Gradio) offer the same two tabs: GitHub Repository Audit and Binary / Archive Sandbox.
+- `app.py` (Gradio, also runs on ZeroGPU) has the tabs Repository Audit, Web Page Audit, Binary / Archive Sandbox and, only with the case-log variables set, Case log (private). A Streamlit UI exists in the GitHub repo only.
 
 - Sandbox Inspector: read-only viewer for all fetched files and archive members. Files with rule hits are sorted first, binaries are shown as hexdump. Nothing is executed.
 
@@ -99,45 +132,32 @@ Static and heuristic analysis tool for detecting compromised machine learning re
 <summary>Prerequisites and Installation</summary>
 
 ### Dependencies
-- Python 3.8 or newer (the Docker image uses 3.13)
+- Python 3.10 (the ZeroGPU runtime)
 
 - `requests` (mandatory)
 
 - `pefile` (optional, for Windows PE header analysis)
 
-- `streamlit` (version 1.37 or newer) for the Streamlit interface
+- `py7zr`, `pyzipper`, `rarfile` (optional, extra archive formats; RAR also needs an `unrar`/`unar`/`bsdtar`/`7z` binary on the system)
 
 - `gradio` for the Gradio interface. `torch`, `transformers`, and `accelerate` are only needed for the local ZeroGPU model.
 
-- Local module `rules.py` in the same directory as `analyzer_core.py` (defines `CODE_EXT`, `DOC_EXT`, `SEV_WEIGHT`, `scan_text`, `summarize`, `prepare_text`, `viewer_lines`, and more)
+- All modules must sit in the same directory: `analyzer_core.py`, `rules.py` (**required**, the rule source for the scanner), `archives.py`, `providers.py`, `forge_audit.py`, `web_scan.py`, `iocs.py`, `ioc_store.py`, `app.py`
 
 
-### Installation (Streamlit)
+### Installation (Hugging Face Space, Gradio / ZeroGPU)
+Put all `.py` files, `requirements.txt` and `README.md` into the Space root (flat). The README front matter (`sdk: gradio`, `app_file: app.py`) is already set. Optional secrets: see "Configuration".
 
-```bash
-git clone https://github.com/NemesisCyberForce/bulkScam.git
-cd bulkScam
-pip install -r requirements_streamlit.txt
-streamlit run src/streamlit_app.py
-```
-
-### Installation (Gradio)
+### Installation (local)
 
 ```bash
-git clone https://github.com/NemesisCyberForce/bulkScam.git
-cd bulkScam
-pip install gradio requests pefile
-python src/gradio_app.py
+git clone https://huggingface.co/spaces/Alibrown/BulkScam
+cd BulkScam
+pip install gradio -r requirements.txt
+python app.py
 ```
 
-### Docker (Streamlit on port 8501)
-`requirements.txt` only contains comments. Replace it with the Streamlit requirements before building:
-
-```bash
-cp requirements_streamlit.txt requirements.txt
-docker build -t bulkscam .
-docker run -p 8501:8501 bulkscam
-```
+Tests (offline, from the repo root): `python dev_tests/run_all.py --fast`
 
 </details>
 
@@ -161,6 +181,8 @@ OPENAI_API_KEY=sk-...
 LLM_ALLOW_PRIVATE_URLS=1
 LOCAL_MODEL_ID=Qwen/Qwen2.5-Coder-1.5B-Instruct
 PRELOAD_LOCAL_MODEL=1
+IOC_STORE_PATH=/data/cases.jsonl
+CASE_ADMIN_TOKEN=choose-a-long-random-token
 ```
 
 - `GITHUB_TOKEN`: no scope needed. Raises the GitHub API limit from 60 to 5000 requests per hour. A token entered in the interface takes priority.
@@ -171,9 +193,15 @@ PRELOAD_LOCAL_MODEL=1
 
 - `LLM_ALLOW_PRIVATE_URLS=1`: allows localhost and LAN addresses as LLM base URL (Ollama, llama.cpp, LM Studio, vLLM). Only for self-hosted use. Never set it on a public instance, otherwise visitors can probe your internal network through the URL field.
 
-- `LOCAL_MODEL_ID` and `PRELOAD_LOCAL_MODEL`: Gradio only, local model on ZeroGPU.
+- `LOCAL_MODEL_ID` and `PRELOAD_LOCAL_MODEL`: Gradio only, local model on ZeroGPU. Any causal LM that `transformers` can load with `AutoModelForCausalLM` and a chat template works (no `trust_remote_code`). Unknown models must be tested first: use the "Test LLM" button and compare JSON discipline against the default model before trusting it.
+
+- `IOC_STORE_PATH`: enables the private case log (JSONL file). Off when unset. On a Space the disk is ephemeral.
+
+- `CASE_ADMIN_TOKEN`: required to see the "Case log" tab content, change case status or export. Without it the tab is not created.
 
 ### Important Module Constants
+Archive limits (`MAX_ENTRY`, `MAX_TOTAL_UNPACKED`, `MAX_ENTRIES`, `MAX_DEPTH`, `MAX_RATIO`) live in `archives.py`; repo-archive limits (`REPO_ARCHIVE_MAX` 60 MB, `REPO_UNPACKED_MAX` 250 MB, `REPO_ENTRIES_MAX` 20000) in `forge_audit.py`; the rest in `analyzer_core.py`.
+
 - `TIMEOUT`: 15 seconds for HTTP requests
 
 - `MAX_DOWNLOAD`: 50 MB limit for binary downloads
@@ -240,6 +268,28 @@ else:
 
 Use `make_llm_config("Off (rules only)")` or `backend=None` to run without an LLM.
 
+### Analyze a Repository on Any Platform
+
+```python
+from forge_audit import ForgeAnalyzer
+
+rep = ForgeAnalyzer(github_token=None).classify_url(
+    "https://codeberg.org/owner/repo",   # GitHub, GitLab, Gitea/Forgejo, Bitbucket, SourceHut, Hugging Face, gist
+    mode="auto",                         # "auto" | "archive" | "api" (api = GitHub only)
+    max_files=40,
+)
+print(rep.get("error") or (rep["verdict"], rep["provider"], rep["mode"]))
+print([i for i in rep["iocs"] if i["strength"] == "strong"])
+```
+
+### Check a Web Page (static)
+
+```python
+import web_scan
+rep = web_scan.scan_url("https://example.com/page")
+print(rep.get("error") or (rep["verdict"], rep["verdict_reasons"]))
+```
+
 ### Analyze a Local Binary File or Archive
 
 ```python
@@ -283,7 +333,7 @@ Downloaded files are only read, hashed, decoded, and scanned. Nothing is run, im
 Every external URL (file downloads, redirects, custom LLM base URLs) is validated by `check_public_url()` prior to connection establishment. Only `http` and `https` without embedded credentials are permitted. All resolved IPv4 and IPv6 addresses must be globally routable; local networks, loopback, and multicast addresses are blocked. For HTTP redirects, each intermediate destination is checked separately, and the `Authorization` header is removed when switching hosts. A DNS rebinding race between the check and the connection is not fully excluded.
 
 ### Zip Bomb Protection
-Archives are processed exclusively in memory. Entries exceeding `MAX_ENTRY` (15 MB), archives with a total sum exceeding `MAX_TOTAL_UNPACKED` (150 MB), and files larger than 1 MB with a compression ratio exceeding a factor of 1000 are discarded. Nested archives are logged but not extracted recursively.
+Archives are processed exclusively in memory. Entries exceeding `MAX_ENTRY` (15 MB), archives with a total sum exceeding `MAX_TOTAL_UNPACKED` (150 MB), and files larger than 1 MB with a compression ratio exceeding a factor of 1000 are discarded. gz/bz2/xz streams are decompressed with a hard output cap (so a tar.gz bomb stops early). Nested archives are opened up to depth 3; deeper ones are listed but not opened. Member names never touch the file system (nothing is extracted to a path).
 
 ### Prompt Injection Protection
 During the LLM audit, the code under review is enclosed within random nonce markers (`<<<UNTRUSTED_CODE_<hex>...>>>`). Lines already flagged by static analysis as `inject` or `jailbreak` are redacted (`[line withheld]`) before transmission to the language model. Files containing recognized injection patterns targeting the scanner itself are completely excluded from LLM transmission. Links in LLM answers are defanged (`hxxp://`).
@@ -350,7 +400,7 @@ The `decide()` function returns one of the following results. The LLM can only e
 
 - Files above the size limits are skipped and listed.
 
-- RAR and 7z contents, AES encrypted ZIP files, and nested archives are not unpacked.
+- RAR, 7z and AES-ZIP are only read when the optional packages (and for RAR a system binary) are installed; otherwise the file is reported as not readable. Archives nested deeper than 3 levels are not opened. Hugging Face pickle/weight files are not inspected. Archive mode has no stars/commit/release metadata. JavaScript-rendered web pages are only partly visible.
 
 - Without an abuse.ch auth key, MalwareBazaar is not queried.
 
@@ -364,8 +414,9 @@ The `decide()` function returns one of the following results. The LLM can only e
 <summary>Tests</summary>
 
 ```bash
-python src/selftest.py
-python src/selftest.py --corpus
+python dev_tests/run_all.py --fast        # about 30 s
+python dev_tests/run_all.py               # plus false-positive corpora and fuzz, 6-10 min
+python dev_tests/selftest.py --corpus     # selftest only, with package corpus
 ```
 
 The self test runs offline against a local mock server for GitHub, OSV, PyPI, npm, MalwareBazaar, and an LLM endpoint. It covers the rules, the SSRF protection, verdicts, the package and artifact checks, the LLM path, and the binary analysis. `--corpus` additionally measures false alarms on installed Python packages. The fixtures contain suspicious text patterns on purpose, they are strings, no executable malware.

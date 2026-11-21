@@ -1,0 +1,10 @@
+# Gradio/ZeroGPU-Space:
+torch==2.8.0
+transformers>=4.44
+accelerate>=0.33
+requests>=2.31,<3
+pefile>=2023.2.7
+# Archive formats beyond the stdlib (all optional; without them the file is reported as "not readable"):
+py7zr>=0.21
+pyzipper>=0.3.6
+rarfile>=4.1
