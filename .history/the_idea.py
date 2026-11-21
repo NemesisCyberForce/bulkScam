@@ -1,4 +1,4 @@
- first idea
+#  first idea ai slop
 # ============================================
 import streamlit as st
 import requests
