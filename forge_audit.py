@@ -52,12 +52,13 @@ class ForgeAnalyzer(ac.GitRepoAnalyzer):
 
     # ------------------------------------------------------------------ public entry
     def classify_url(self, url: str, *, mode: str = "auto", max_files: int = 40, backend=None, llm_max_files: int = 6,
+                     llm_mode: str = "smart",
                      system_prompt: Optional[str] = None, user_template: Optional[str] = None, check_osv: bool = True,
                      check_deps: bool = True, artifact_max: int = 2, abuse_key: Optional[str] = None,
                      deep_stars: bool = False, progress: Optional[Callable[[str], None]] = None) -> Dict:
         say = progress or (lambda m: None)
         mode = mode if mode in MODES else "auto"
-        kw = dict(max_files=max_files, backend=backend, llm_max_files=llm_max_files, system_prompt=system_prompt,
+        kw = dict(max_files=max_files, backend=backend, llm_max_files=llm_max_files, llm_mode=llm_mode, system_prompt=system_prompt,
                   user_template=user_template, check_osv=check_osv, check_deps=check_deps, artifact_max=artifact_max,
                   abuse_key=abuse_key, progress=progress)
         get_json = providers.json_getter(ac.safe_get, ac.UA)
@@ -233,6 +234,7 @@ class ForgeAnalyzer(ac.GitRepoAnalyzer):
     def _assess(self, *, provider: str, mode: str, repo_info: str, blobs: List[dict],
                 fetch: Callable[[str], Tuple[Optional[bytes], str]], members: Dict[str, bytes], notes: List[str],
                 T: Dict[str, float], t_all: float, say, tree_truncated: bool, max_files: int, backend, llm_max_files: int,
+                llm_mode: str = "smart",
                 system_prompt: Optional[str], user_template: Optional[str], check_osv: bool, check_deps: bool,
                 artifact_max: int, abuse_key: Optional[str], progress=None, description: str = "") -> Dict:
         def lap(name, t0):
@@ -295,21 +297,23 @@ class ForgeAnalyzer(ac.GitRepoAnalyzer):
                 members, list(dict.fromkeys(readme_pw)), abuse_key, artifact_max, sandbox_files, say)
             lap("artifacts", t)
 
-        llm_results, llm_errors, llm_skipped = [], [], []
-        if backend is not None:
-            say("LLM audit ...")
-            t = time.perf_counter()
-            llm_results, llm_errors, llm_skipped = self._llm_audit(per_file, fulltext, backend, sp, ut, llm_max_files)
-            lap("llm", t)
-
         ioc_list = iocs.extract({**fulltext, **({"(repo-description)": description} if description else {})},
                                 readme_pw, [a["sha256"] for a in artifacts])
         coverage = len(per_file) / max(n_cand, 1)
         code_scanned = sum(1 for p in per_file if PurePosixPath(p).suffix.lower() in rules.CODE_EXT)
         flags: List[str] = []
-        verdict, confidence, reasons = ac.decide(
-            summary, len(per_file), osv["malicious"], [], bad_tree, flags, llm_results, coverage, code_scanned,
-            extra={"artifacts": artifacts, "deps_flagged": deps["flagged"], "archives": archives_in})
+        dargs = (summary, len(per_file), osv["malicious"], [], bad_tree, flags)
+        dextra = {"artifacts": artifacts, "deps_flagged": deps["flagged"], "archives": archives_in}
+        llm_results, llm_errors, llm_skipped, llm_gate = [], [], [], {"mode": llm_mode, "sent": 0}
+        if backend is not None:
+            pre = ac.decide(*dargs, [], coverage, code_scanned, extra=dextra)[0]
+            say("LLM audit ...")
+            t = time.perf_counter()
+            llm_results, llm_errors, llm_skipped, llm_gate = self._llm_audit(
+                per_file, fulltext, backend, sp, ut, llm_max_files, llm_mode,
+                "rules already give CRITICAL - LLM not needed" if pre.startswith("[CRITICAL]") else "")
+            lap("llm", t)
+        verdict, confidence, reasons = ac.decide(*dargs, llm_results, coverage, code_scanned, extra=dextra)
         T["total"] = round(time.perf_counter() - t_all, 2)
         return {
             "verdict": verdict, "confidence": confidence, "verdict_reasons": reasons, "score": summary["malware_score"],
@@ -322,7 +326,7 @@ class ForgeAnalyzer(ac.GitRepoAnalyzer):
             "osv": osv, "deps": deps, "artifacts": artifacts, "artifact_errors": artifact_errors,
             "artifact_skipped": artifact_skipped, "stars": {"checked": False, "note": "not available in this mode"},
             "llm_results": llm_results, "llm_errors": llm_errors, "llm_skipped": llm_skipped,
-            "leaks": summary["leaks"], "iocs": ioc_list, "rate_limit": self.rate, "timings": T,
+            "llm_gate": llm_gate, "leaks": summary["leaks"], "iocs": ioc_list, "rate_limit": self.rate, "timings": T,
             "pattern_scores": {"legit": len(summary["real_training_files"]) * 10,
                                "fake": len(summary["wrapper_signals"]) * 5, "malware_risk": summary["malware_score"]},
             "repo_info": repo_info, "sandbox_files": sandbox_files,

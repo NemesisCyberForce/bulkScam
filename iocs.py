@@ -37,7 +37,10 @@ BENIGN = ("github.com", "githubusercontent.com", "gitlab.com", "huggingface.co",
           "example.com", "example.org", "localhost", "ngrok.com", "arxiv.org", "doi.org", "medium.com", "reddit.com",
           "discord.com", "discord.gg", "telegram.org", "t.me", "paypal.com", "buymeacoffee.com", "ko-fi.com", "patreon.com",
           "bitbucket.org", "codeberg.org", "sr.ht", "pypa.io", "python.org", "pip.pypa.io", "nuget.org", "rubygems.org",
-          "crates.io", "golang.org", "go.dev", "sourceforge.net", "gnu.org", "ubuntu.com", "debian.org")
+          "crates.io", "golang.org", "go.dev", "sourceforge.net", "gnu.org", "ubuntu.com", "debian.org", "discordapp.com",
+          "discordapp.net", "discord.gift", "roblox.com", "ipinfo.io", "ipify.org", "ifconfig.me", "icanhazip.com")
+_CODE_SUFFIX = (".py", ".pyw", ".js", ".mjs", ".ts", ".tsx", ".jsx", ".sh", ".bash", ".ps1", ".bat", ".cmd", ".vbs", ".json", ".yml",
+                ".yaml", ".toml", ".ini", ".cfg", ".c", ".h", ".cpp", ".cs", ".java", ".go", ".rs", ".php", ".rb", ".lua", ".pyc")
 _EMAIL_SKIP = ("example.com", "example.org", "users.noreply.github.com", "noreply.github.com", "localhost")
 
 _URL = re.compile(r"https?://[^\s\"'<>\\)\]}]{4,300}", re.I)
@@ -161,7 +164,8 @@ def extract(texts: Dict[str, str], archive_passwords: Optional[Iterable[bytes]] 
             for ip in sorted(path_ips):
                 acc.add("ip", ip, path)
         low = t.lower()
-        if "telegram" in low or "t.me" in low or "download" in low:  # bare domains only in scam-relevant context
+        # bare domains (no http://) only in prose files: in code 'self.org' / 'os.path' are attribute accesses, not hosts
+        if not path.lower().endswith(_CODE_SUFFIX) and ("telegram" in low or "t.me" in low or "download" in low):
             for m in _BARE_DOMAIN.finditer(t[:200_000]):
                 d = m.group(1).lower()
                 if _is_benign(d):

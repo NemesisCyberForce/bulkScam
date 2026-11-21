@@ -7,6 +7,7 @@ FAST = "--fast" in sys.argv
 D = "dev_tests"
 stages = [("Selftest (rules, core, archives, mock server)", [sys.executable, f"{D}/selftest.py"], True),
           ("Forges, web scan, IOCs, case store", [sys.executable, f"{D}/test_forges.py"], True),
+          ("LLM discipline (rules first, evidence-backed verdicts)", [sys.executable, f"{D}/test_llm_gate.py"], True),
           ("Gradio app (fake gradio module)", [sys.executable, f"{D}/test_app_gradio.py"], True),
           ("Robustness (broken archives, huge tree, LLM garbage)", [sys.executable, f"{D}/robust_core.py"], True),
           ("Selftest + package corpus", [sys.executable, f"{D}/selftest.py", "--corpus"], False),

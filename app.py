@@ -212,10 +212,19 @@ def md_repo(rep):
         out.append(f"\n**Star analysis:** {_esc(stars['note'])}")
     if rep["leaks"]:
         out.append("\n**Possible credential leaks (redacted):** " + _esc("; ".join(rep["leaks"][:8])))
-    if rep["llm_results"]:
-        out.append("\n**LLM audit** (can only escalate):")
-        out += [f"- {_esc(r['file'])}: {r['result']['classification']} {r['result']['confidence']}% - "
-                f"{_esc(r['result']['reasoning'])}" for r in rep["llm_results"]]
+    g = rep.get("llm_gate") or {}
+    if g.get("skipped_reason"):
+        out.append(f"\n**LLM:** not used - {_esc(g['skipped_reason'])}.")
+    elif g.get("mode") and rep["llm_results"] or g.get("sent"):
+        out.append(f"\n**LLM audit** ({_esc(g.get('mode', ''))} mode: {g.get('sent', 0)} sent, "
+                   f"{g.get('clear_by_rules', 0)} already clear by rules, {g.get('clean', 0)} clean - "
+                   "only evidence-backed findings can escalate):")
+        for r in rep["llm_results"]:
+            x = r["result"]
+            tagtxt = ""
+            if x["classification"] in ("MALWARE_STEALER", "JAILBREAK_WRAPPER"):
+                tagtxt = " **[confirmed]**" if x.get("confirmed") else " *[unconfirmed - ignored for the verdict]*"
+            out.append(f"- {_esc(r['file'])}: {x['classification']} {x['confidence']}%{tagtxt} - {_esc(x['reasoning'])}")
     out += [f"\n**LLM error:** {_esc(e)}" for e in rep["llm_errors"]]
     out += [f"\n{_esc(e)}" for e in rep["llm_skipped"]]
     out += md_iocs(rep)
@@ -273,7 +282,7 @@ def _result(rep, md):
 # ------------------------------------------------------------------ Handler (NICHT GPU-dekoriert)
 def run_repo_audit(url, gh_token, provider, key, model, base_url, max_files, llm_max, sys_prompt, user_tpl,
                    abuse_key, artifact_max, check_deps, deep_stars, mode="Auto (GitHub: API, fallback archive)",
-                   progress=gr.Progress()):
+                   llm_mode="Smart (rules first, only unclear files)", progress=gr.Progress()):
     if not (url or "").strip():
         raise gr.Error("Please enter a repository URL.")
     try:
@@ -282,6 +291,7 @@ def run_repo_audit(url, gh_token, provider, key, model, base_url, max_files, llm
         raise gr.Error(f"LLM setting: {e}")
     rep = forge_audit.ForgeAnalyzer(gh_token or None).classify_url(
         url.strip(), mode=MODE_CHOICES.get(mode, "auto"), max_files=int(max_files), backend=backend,
+        llm_mode="all" if str(llm_mode).startswith("All") else "smart",
         llm_max_files=int(llm_max), system_prompt=sys_prompt, user_template=user_tpl, check_deps=bool(check_deps),
         artifact_max=int(artifact_max), deep_stars=bool(deep_stars),
         abuse_key=abuse_key or os.environ.get("ABUSECH_API_KEY"), progress=_progress_fn(progress))
@@ -381,6 +391,10 @@ with _safe(gr.Blocks, title="Scam & Malware Audit Engine") as demo:
             key = gr.Textbox(label="API key / HF token", type="password")
             model = gr.Textbox(label="Model ID")
             base_url = gr.Textbox(label="Base URL (Custom only)")
+            llm_mode = gr.Radio(["Smart (rules first, only unclear files)", "All top files (more tokens)"],
+                                value="Smart (rules first, only unclear files)", label="What goes to the LLM",
+                                info="Smart: files with rule risk 1-49 or obfuscation. Clear and clean files are not sent. "
+                                     "A LLM verdict only counts with a verbatim quote that the rules back up.")
             llm_max = gr.Slider(1, 40, value=6, step=1, label="Max. files sent to LLM (highest rule risk first; saves free quotas)")
             provider.change(provider_defaults, provider, [model, base_url, note])
             llm_test_btn = gr.Button("Test LLM")
@@ -400,7 +414,7 @@ with _safe(gr.Blocks, title="Scam & Malware Audit Engine") as demo:
         r_state, r_dd, r_flag, r_code = make_viewer()
         go.click(run_repo_audit,
                  [url, gh_token, provider, key, model, base_url, max_files, llm_max, sys_prompt, user_tpl,
-                  abuse_key, artifact_max, check_deps, deep_stars, mode],
+                  abuse_key, artifact_max, check_deps, deep_stars, mode, llm_mode],
                  [r_md, r_json, r_state, r_dd, r_flag, r_code])
 
     with gr.Tab("Web Page Audit"):

@@ -102,13 +102,15 @@ Static and heuristic analysis tool for detecting compromised machine learning re
 
 
 ### OpenAICompatBackend (LLM Audit)
-- Optional secondary check of suspicious code files via OpenAI-compatible `/chat/completions` endpoints. Only `.py`, `.pyw`, `.ipynb`, `.js`, `.mjs`, `.sh`, `.ps1`, `.bat`, and `.cmd` files are candidates. Default 6 files, up to 15.
+- Optional secondary check of suspicious code files via OpenAI-compatible `/chat/completions` endpoints. Only `.py`, `.pyw`, `.ipynb`, `.js`, `.mjs`, `.sh`, `.ps1`, `.bat`, and `.cmd` files are candidates. Default 6 files, up to 40.
 
 - Preconfigured profiles for HuggingFace Inference Providers, Groq, Google Gemini, OpenRouter, Cerebras, Mistral, OpenAI, and custom OpenAI-compatible endpoints.
 
-- Classification into `REAL_TRAINING`, `API_WRAPPER`, `JAILBREAK_WRAPPER`, `MALWARE_STEALER`, or `UNCLEAR`.
+- **Rules first, LLM only for the unclear (default "Smart")**: only files with a rule risk of 1-49, or with obfuscation signs (very long lines/tokens, many `\x` escapes) and no rule hit, go to the LLM. Files that are already clear by rules (risk 50 or more) and clean files are not sent. If the rules alone already give CRITICAL, the LLM is not called at all. Mode "All top files" keeps the old behaviour (more tokens). The report shows the numbers in `llm_gate`.
+- Classification into `BENIGN` (the default for ordinary code), `REAL_TRAINING`, `API_WRAPPER`, `JAILBREAK_WRAPPER`, `MALWARE_STEALER`, or `UNCLEAR`. The prompt contains no example attack phrases (small models repeat them back), does not hint at scams, and demands verbatim quotes.
 
-- The LLM result serves exclusively to escalate a finding and cannot downgrade static hits.
+- The LLM can only escalate, never clear, **and only with evidence**: a `MALWARE_STEALER` answer counts only if (1) at least one of its quoted indicators appears verbatim in the file and (2) the rules back it up in that file (hits in exfil/exec/stealer/hook) or the file shows obfuscation. It can lead to CRITICAL only if the file's own rule risk is 25 or more; otherwise it is a warning. Unconfirmed answers are shown as "ignored for the verdict".
+- A `JAILBREAK_WRAPPER` answer from the LLM never changes a verdict: jailbreak lines are withheld from the LLM, so it cannot see them. Jailbreak detection is rule-only.
 
 - System prompt and user template are editable in the interface. The JSON output format and the injection protection are appended automatically and cannot be edited.
 
@@ -348,9 +350,9 @@ The `scrub()` function strips passed tokens and API keys from all caught error m
 <details>
 <summary>Evaluation Classes (Verdicts)</summary>
 
-The `decide()` function returns one of the following results. The LLM can only escalate, never clear.
+The `decide()` function returns one of the following results. The LLM can only escalate, never clear, and only with evidence (see above).
 
-- `[CRITICAL] POTENTIAL SCAM / MALWARE TRAP DETECTED`: Known malicious package according to OSV, a critical artifact or a MalwareBazaar match, high rating via static rules, strong rule combinations (bonus of 25 or more), or LLM classification as `MALWARE_STEALER` (confidence 70 percent or higher).
+- `[CRITICAL] POTENTIAL SCAM / MALWARE TRAP DETECTED`: Known malicious package according to OSV, a critical artifact or a MalwareBazaar match, high rating via static rules, strong rule combinations (bonus of 25 or more), or an evidence-backed LLM classification as `MALWARE_STEALER` (confidence 70 percent or higher, quoted lines confirmed, file rule risk 25 or more).
 
 - `[FAKE] SCAM FUNNEL: JAILBREAK-PROMPT WRAPPER + UPSELL OF AN UNVERIFIABLE 'PRIVATE MODEL'`: No own training code, use of jailbreak prompts for third-party APIs combined with references to external channels (Telegram, file hosters) for selling alleged private models.
 
@@ -358,7 +360,7 @@ The `decide()` function returns one of the following results. The LLM can only e
 
 - `[FAKE] SCAM-TYPICAL CLAIMS BUT CODE ONLY CALLS EXTERNAL APIs`: Promotion of unfiltered models in the README with pure invocation of third-party APIs without disclosure.
 
-- `[WARNING] JAILBREAK-PROMPT WRAPPER - NO OWN MODEL, BEHAVIOUR DEPENDS ON A THIRD-PARTY API`: Wrapper around third-party API with embedded jailbreak system prompt.
+- `[WARNING] JAILBREAK-PROMPT WRAPPER - NO OWN MODEL, BEHAVIOUR DEPENDS ON A THIRD-PARTY API`: Wrapper around third-party API with embedded jailbreak system prompt (found by the static rules, never by the LLM alone).
 
 - `[WARNING] SUSPICIOUS PATTERNS - MANUAL REVIEW`: Medium rule score, executable files in the repository or releases, medium risk artifacts, strongly flagged packages, an archive password in the README together with archives or executables, prompt injection attempts, or clustered metadata anomalies.
 
