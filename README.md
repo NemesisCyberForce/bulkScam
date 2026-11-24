@@ -18,7 +18,9 @@ pinned: true
 > **Status:** the German/Turkish READMEs may lag behind this English one. Streamlit files are not part of this Space (see the GitHub repo).
 
 Use it for free  to check the shit. Have fun & stay secure
-> https://huggingface.co/spaces/Alibrown/BulkScam
+> GPU with own LLM https://huggingface.co/spaces/Alibrown/BulkScam
+>
+> CPU/Wrapper (same code) https://huggingface.co/spaces/Alibrown/BulkScam-CPU
 
 Static and heuristic analysis tool for detecting compromised machine learning repositories, undeclared API wrappers, scam funnels, and malware in git projects and binary files. Nothing from the analyzed target is ever executed. All user interface texts and report messages are in English, code comments are in German.
 
